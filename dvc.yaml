@@ -1,0 +1,38 @@
+stages:
+  ingest:
+    cmd: uv run python src/data/ingest.py
+    deps:
+      - src/data/ingest.py
+    params:
+      - ingest.num_records
+      - ingest.random_seed
+      - ingest.user_id_min
+      - ingest.user_id_max
+    outs:
+      - data/raw/credit_transactions.parquet
+
+  materialize_features:
+    cmd: uv run python src/features/materialize.py
+    deps:
+      - data/raw/credit_transactions.parquet
+      - src/features/feature_store.yaml
+      - src/features/schema.py
+      - src/features/materialize.py
+
+  build_training_features:
+    cmd: uv run python src/features/build_training_data.py
+    deps:
+      - data/raw/credit_transactions.parquet
+      - src/features/schema.py
+      - src/features/build_training_data.py
+    params:
+      - features.lookback_days
+    outs:
+      - data/processed/train_features.parquet
+
+  validate_data:
+    cmd: uv run pytest tests/test_data_quality.py
+    deps:
+      - data/processed/train_features.parquet
+      - src/features/data_validation.py
+      - tests/test_data_quality.py

@@ -1,0 +1,77 @@
+schema: '2.0'
+stages:
+  ingest:
+    cmd: uv run python src/data/ingest.py
+    deps:
+    - path: src/data/ingest.py
+      hash: md5
+      md5: 3c19ba5a928000614a1b9d83283d5769
+      size: 1589
+    params:
+      params.yaml:
+        ingest.num_records: 10000
+        ingest.random_seed: 42
+        ingest.user_id_max: 1050
+        ingest.user_id_min: 1000
+    outs:
+    - path: data/raw/credit_transactions.parquet
+      hash: md5
+      md5: 4c67bbffd541cd15d884d1786bbe647b
+      size: 235926
+  materialize_features:
+    cmd: uv run python src/features/materialize.py
+    deps:
+    - path: data/raw/credit_transactions.parquet
+      hash: md5
+      md5: 4c67bbffd541cd15d884d1786bbe647b
+      size: 235926
+    - path: src/features/feature_store.yaml
+      hash: md5
+      md5: 1ff509256c4295054951a64ef085afb5
+      size: 184
+    - path: src/features/materialize.py
+      hash: md5
+      md5: a76207b191acb18520a68a22a005681d
+      size: 497
+    - path: src/features/schema.py
+      hash: md5
+      md5: 5ba9d37d141d5021051abe0423327b7a
+      size: 1131
+  build_training_features:
+    cmd: uv run python src/features/build_training_data.py
+    deps:
+    - path: data/raw/credit_transactions.parquet
+      hash: md5
+      md5: 4c67bbffd541cd15d884d1786bbe647b
+      size: 235926
+    - path: src/features/build_training_data.py
+      hash: md5
+      md5: bd9c13308224d7e0ce87d57604a9a970
+      size: 1770
+    - path: src/features/schema.py
+      hash: md5
+      md5: 5ba9d37d141d5021051abe0423327b7a
+      size: 1131
+    params:
+      params.yaml:
+        features.lookback_days: 30
+    outs:
+    - path: data/processed/train_features.parquet
+      hash: md5
+      md5: 19a386c516fcd951d550ae1e6a2cf431
+      size: 208729
+  validate_data:
+    cmd: uv run pytest tests/test_data_quality.py
+    deps:
+    - path: data/processed/train_features.parquet
+      hash: md5
+      md5: 19a386c516fcd951d550ae1e6a2cf431
+      size: 208729
+    - path: src/features/data_validation.py
+      hash: md5
+      md5: fe0e8dcc97cc1fb638d34c8a9c9433f7
+      size: 1137
+    - path: tests/test_data_quality.py
+      hash: md5
+      md5: 903fdf48c9cd00637511a63834492098
+      size: 1395

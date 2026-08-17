@@ -1,0 +1,9 @@
+ingest:
+  num_records: 10000
+  random_seed: 42
+  user_id_min: 1000
+  user_id_max: 1050
+
+features:
+  lookback_days: 30
+  target_column: "target_default"
