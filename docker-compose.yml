@@ -40,7 +40,7 @@ services:
       postgres:
         condition: service_healthy
     command: >
-      mlflow server
+      python -m mlflow server
       --backend-store-uri postgresql://mlops_user:mlops_password@postgres:5432/mlflow_db
       --default-artifact-root /mlflow/artifacts
       --host 0.0.0.0
