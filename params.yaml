@@ -7,3 +7,12 @@ ingest:
 features:
   lookback_days: 30
   target_column: "target_default"
+
+train:
+  test_size: 0.2
+  random_state: 42
+  n_estimators: 100
+  learning_rate: 0.05
+  max_depth: 4
+  subsample: 0.8
+  scale_pos_weight: 9.0 # balances 90/10 class imbalane

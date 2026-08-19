@@ -16,6 +16,7 @@ dependencies = [
     "redis>=8.1.0",
     "scikit-learn>=1.9.0",
     "uvicorn>=0.34.0",
+    "xgboost>=3.2.0",
 ]
 [tool.pytest.ini_options]
 pythonpath = ["."]
