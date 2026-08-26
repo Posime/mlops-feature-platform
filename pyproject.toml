@@ -8,6 +8,8 @@ dependencies = [
     "fastapi>=0.141.1",
     "feast>=0.65.0",
     "mlflow>=3.15.1",
+    "onnx>=1.22.0",
+    "onnxmltools>=1.16.0",
     "onnxruntime>=1.28.0",
     "pandas>=2.3.3",
     "pandera>=0.32.1",
@@ -15,6 +17,7 @@ dependencies = [
     "pytest>=9.1.1",
     "redis>=8.1.0",
     "scikit-learn>=1.9.0",
+    "skl2onnx>=1.20.0",
     "uvicorn>=0.34.0",
     "xgboost>=3.2.0",
 ]
