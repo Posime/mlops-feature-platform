@@ -75,3 +75,59 @@ stages:
       hash: md5
       md5: 903fdf48c9cd00637511a63834492098
       size: 1395
+  train:
+    cmd: uv run python src/models/train.py
+    deps:
+    - path: data/processed/train_features.parquet
+      hash: md5
+      md5: 19a386c516fcd951d550ae1e6a2cf431
+      size: 208729
+    - path: src/models/train.py
+      hash: md5
+      md5: 1143d9fe411f145bfccb3580c23ff659
+      size: 4752
+    params:
+      params.yaml:
+        train.learning_rate: 0.05
+        train.max_depth: 4
+        train.n_estimators: 100
+        train.random_state: 42
+        train.scale_pos_weight: 9.0
+        train.subsample: 0.8
+        train.test_size: 0.2
+    outs:
+    - path: models/model.json
+      hash: md5
+      md5: d780e541c36b4e81be0d33d3085d1863
+      size: 190950
+    - path: reports/metrics.json
+      hash: md5
+      md5: 1cc520b18d5a35a6f193315af4732145
+      size: 206
+  export_onnx:
+    cmd: uv run python src/models/export_onnx.py
+    deps:
+    - path: models/model.json
+      hash: md5
+      md5: d780e541c36b4e81be0d33d3085d1863
+      size: 190950
+    - path: src/models/export_onnx.py
+      hash: md5
+      md5: 17efc225b03d0a72740c7d8822d7311c
+      size: 1747
+    outs:
+    - path: models/model.onnx
+      hash: md5
+      md5: 53cfb34e659fb342ca4063acfa00bb6d
+      size: 83324
+  register_model:
+    cmd: uv run python src/models/register_model.py
+    deps:
+    - path: reports/metrics.json
+      hash: md5
+      md5: 1cc520b18d5a35a6f193315af4732145
+      size: 206
+    - path: src/models/register_model.py
+      hash: md5
+      md5: d61689ed5e069e4b42a65bf4837e1c0f
+      size: 2254

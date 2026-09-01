@@ -36,3 +36,36 @@ stages:
       - data/processed/train_features.parquet
       - src/features/data_validation.py
       - tests/test_data_quality.py
+
+  train:
+    cmd: uv run python src/models/train.py
+    deps:
+      - data/processed/train_features.parquet
+      - src/models/train.py
+    params:
+      - train.test_size
+      - train.random_state
+      - train.n_estimators
+      - train.learning_rate
+      - train.max_depth
+      - train.subsample
+      - train.scale_pos_weight
+    outs:
+      - models/model.json
+    metrics:
+      - reports/metrics.json:
+          cache: false
+
+  export_onnx:
+    cmd: uv run python src/models/export_onnx.py
+    deps:
+      - models/model.json
+      - src/models/export_onnx.py
+    outs:
+      - models/model.onnx
+
+  register_model:
+    cmd: uv run python src/models/register_model.py
+    deps:
+      - reports/metrics.json
+      - src/models/register_model.py

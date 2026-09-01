@@ -22,7 +22,8 @@ def build_historical_dataset():
     "user_credit_features:credit_score",
     "user_credit_features:failed_transactions_24h",
   ]
-
+  
+  #point-in-line join logic
   training_data = store.get_historical_features(
     entity_df = entity_df,
     features= features_to_fetch
