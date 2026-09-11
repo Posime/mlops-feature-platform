@@ -46,5 +46,23 @@ services:
       --host 0.0.0.0
       --port 5000
 
+  serving:
+    build:
+      context: .
+      dockerfile: Dockerfile.serving
+    container_name: mlops_serving
+    ports:
+      - "8000:8000"
+    environment:
+      - FEAST_REPO_PATH=/app/src/features
+      - MODEL_PATH=/app/models/model.onnx
+      - WEB_CONCURRENCY=2
+    volumes:
+      - ./src/features:/app/src/features
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
