@@ -1,5 +1,7 @@
 import multiprocessing
 import os
+import shutil
+from prometheus_client import multiprocess
 
 # Network Binding
 bind = os.getenv("BIND", "0.0.0.0:8000")
@@ -23,3 +25,12 @@ max_requests_jitter = int(os.getenv("MAX_REQUESTS_JITTER", 200))
 loglevel = os.getenv("LOG_LEVEL", "info")
 accesslog = "-"
 errorlog = "-"
+
+def on_starting(server):
+    multiprocess_dir = os.getenv("PROMETHEUS_MULTIPROC_DIR", "/tmp/prometheus_multiproc")
+    if os.path.exists(multiprocess_dir):
+        shutil.rmtree(multiprocess_dir)
+    os.makedirs(multiprocess_dir, exist_ok=True)
+
+def child_exit(server, worker):
+    multiprocess.mark_process_dead(worker.pid)

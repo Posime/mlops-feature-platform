@@ -56,12 +56,23 @@ services:
     environment:
       - FEAST_REPO_PATH=/app/src/features
       - MODEL_PATH=/app/models/model.onnx
-      - WEB_CONCURRENCY=2
+      - WEB_CONCURRENCY=4
     volumes:
       - ./src/features:/app/src/features
     depends_on:
       redis:
         condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: mlops_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - serving
     restart: unless-stopped
 
 volumes:
