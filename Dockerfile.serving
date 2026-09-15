@@ -47,6 +47,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Set permissions
 RUN chown -R appuser:mlops /app
+RUN mkdir -p /tmp/prometheus_multiproc && chown -R appuser:mlops /tmp/prometheus_multiproc
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
 USER appuser
 
 EXPOSE 8000
