@@ -59,6 +59,8 @@ services:
       - WEB_CONCURRENCY=4
     volumes:
       - ./src/features:/app/src/features
+      - ./src/serving:/app/src/serving
+      - ./data/inference_logs:/app/data/inference_logs
     depends_on:
       redis:
         condition: service_healthy

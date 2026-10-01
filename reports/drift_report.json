@@ -1,0 +1,31 @@
+{
+  "timestamp": "2026-10-01T19:55:09.719178",
+  "sample_size": 60,
+  "features": {
+    "transaction_amount": {
+      "psi": 10.0875,
+      "ks_statistic": 0.5,
+      "ks_p_value": 0.0,
+      "drift_detected": true
+    },
+    "account_balance": {
+      "psi": 11.973,
+      "ks_statistic": 0.6939,
+      "ks_p_value": 0.0,
+      "drift_detected": true
+    },
+    "credit_score": {
+      "psi": 11.997,
+      "ks_statistic": 0.6617,
+      "ks_p_value": 0.0,
+      "drift_detected": true
+    },
+    "failed_transactions_24h": {
+      "psi": 10.6882,
+      "ks_statistic": 0.8024,
+      "ks_p_value": 0.0,
+      "drift_detected": true
+    }
+  },
+  "retrain_recommended": true
+}

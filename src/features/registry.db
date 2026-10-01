@@ -1,0 +1,33 @@
+
+q
+Q
+user_id"Customer unique identification key"user_idJcredit_scoring_platform
+âˆ’ÕØİáüâˆ’ÕØİáü
+N
+.
+__dummy"
+__dummy_idJcredit_scoring_platform
+âˆ’ÕØİáüâˆ’ÕØİáü1"$a19383a7-cf71-4df0-bcb3-214fb04d6c93*âˆ’ÕÈóË”2—
+ö
+user_credit_featurescredit_scoring_platformuser_id"
+transaction_amount"
+account_balance"
+credit_score"
+failed_transactions_24h*
+teamrisk_analytics2€š:¨event_timestampZ,*../../data/raw/credit_transactions.parquetŠ1feast.infra.offline_stores.file_source.FileSource¢raw_credit_source’âˆ’Õ¸Ø¹Á"âˆ’ÕØİáü@b
+user_id’latest
+âˆ’ÕØİáüâˆ’ÕØİáübÂevent_timestampZ,*../../data/raw/credit_transactions.parquetŠ1feast.infra.offline_stores.file_source.FileSource¢raw_credit_sourceªcredit_scoring_platform’âˆ’Õ¸Ø¹Á"âˆ’ÕØİáüŠ9
+
+credit_scoring_platform
+âˆ’Õ˜†ÁÄâˆ’Õ˜†ÁÄ’
+‹
+user_credit_featurescredit_scoring_platform"feature_view*—
+ö
+user_credit_featurescredit_scoring_platformuser_id"
+transaction_amount"
+account_balance"
+credit_score"
+failed_transactions_24h*
+teamrisk_analytics2€š:¨event_timestampZ,*../../data/raw/credit_transactions.parquetŠ1feast.infra.offline_stores.file_source.FileSource¢raw_credit_source’âˆ’Õ¸Ø¹Á"âˆ’ÕØİáü@b
+user_id’latest
+âˆ’ÕØİáüâˆ’ÕØİáü2âˆ’ÕØİáüB$9f34f028-7cf2-49eb-9eda-bfe7fb979b93
