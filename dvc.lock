@@ -5,8 +5,8 @@ stages:
     deps:
     - path: src/data/ingest.py
       hash: md5
-      md5: 3c19ba5a928000614a1b9d83283d5769
-      size: 1589
+      md5: 29074d67e207ccaa92bd0edfc4c9aa96
+      size: 1951
     params:
       params.yaml:
         ingest.num_records: 10000
@@ -16,23 +16,23 @@ stages:
     outs:
     - path: data/raw/credit_transactions.parquet
       hash: md5
-      md5: 4c67bbffd541cd15d884d1786bbe647b
+      md5: 83b1b732b37d09e2c230fa9979595b07
       size: 235926
   materialize_features:
     cmd: uv run python src/features/materialize.py
     deps:
     - path: data/raw/credit_transactions.parquet
       hash: md5
-      md5: 4c67bbffd541cd15d884d1786bbe647b
+      md5: 83b1b732b37d09e2c230fa9979595b07
       size: 235926
     - path: src/features/feature_store.yaml
       hash: md5
-      md5: 1ff509256c4295054951a64ef085afb5
-      size: 184
+      md5: a21f1bee185811fe1820f03eb54ad128
+      size: 208
     - path: src/features/materialize.py
       hash: md5
-      md5: a76207b191acb18520a68a22a005681d
-      size: 497
+      md5: 3fd0e07b9e702e7cb582d4c572182788
+      size: 850
     - path: src/features/schema.py
       hash: md5
       md5: 5ba9d37d141d5021051abe0423327b7a
@@ -42,7 +42,7 @@ stages:
     deps:
     - path: data/raw/credit_transactions.parquet
       hash: md5
-      md5: 4c67bbffd541cd15d884d1786bbe647b
+      md5: 83b1b732b37d09e2c230fa9979595b07
       size: 235926
     - path: src/features/build_training_data.py
       hash: md5
@@ -58,14 +58,14 @@ stages:
     outs:
     - path: data/processed/train_features.parquet
       hash: md5
-      md5: 19a386c516fcd951d550ae1e6a2cf431
+      md5: b924ea483e718c2875e2ede15a49e7f7
       size: 208729
   validate_data:
     cmd: uv run pytest tests/test_data_quality.py
     deps:
     - path: data/processed/train_features.parquet
       hash: md5
-      md5: 19a386c516fcd951d550ae1e6a2cf431
+      md5: b924ea483e718c2875e2ede15a49e7f7
       size: 208729
     - path: src/features/data_validation.py
       hash: md5
@@ -80,7 +80,7 @@ stages:
     deps:
     - path: data/processed/train_features.parquet
       hash: md5
-      md5: 19a386c516fcd951d550ae1e6a2cf431
+      md5: b924ea483e718c2875e2ede15a49e7f7
       size: 208729
     - path: src/models/train.py
       hash: md5
@@ -98,19 +98,19 @@ stages:
     outs:
     - path: models/model.json
       hash: md5
-      md5: d780e541c36b4e81be0d33d3085d1863
-      size: 190950
+      md5: fb93291b331e269c6703059bcd6e9016
+      size: 190426
     - path: reports/metrics.json
       hash: md5
-      md5: 1cc520b18d5a35a6f193315af4732145
-      size: 206
+      md5: e5ec1928506e9e15b08271b733643ca4
+      size: 192
   export_onnx:
     cmd: uv run python src/models/export_onnx.py
     deps:
     - path: models/model.json
       hash: md5
-      md5: d780e541c36b4e81be0d33d3085d1863
-      size: 190950
+      md5: fb93291b331e269c6703059bcd6e9016
+      size: 190426
     - path: src/models/export_onnx.py
       hash: md5
       md5: 17efc225b03d0a72740c7d8822d7311c
@@ -118,15 +118,15 @@ stages:
     outs:
     - path: models/model.onnx
       hash: md5
-      md5: 53cfb34e659fb342ca4063acfa00bb6d
-      size: 83324
+      md5: 525222cef7afd2f96e98d2bd601a8e55
+      size: 83014
   register_model:
     cmd: uv run python src/models/register_model.py
     deps:
     - path: reports/metrics.json
       hash: md5
-      md5: 1cc520b18d5a35a6f193315af4732145
-      size: 206
+      md5: e5ec1928506e9e15b08271b733643ca4
+      size: 192
     - path: src/models/register_model.py
       hash: md5
       md5: d61689ed5e069e4b42a65bf4837e1c0f
