@@ -38,14 +38,16 @@ def run_benchmark(num_iterations=1000):
 
     print("\n⚡ ================= INFERENCE LATENCY BENCHMARK ================")
     print(f"🔥 Iterations: {num_iterations} single-record requests")
-    print("----------------------------------------------------------------")
-    print(
-        f"Native XGBoost (Python) -> p50: {np.percentile(xgb_latencies, 50):.3f}ms | p95: {np.percentile(xgb_latencies, 95):.3f}ms | p99: {np.percentile(xgb_latencies, 99):.3f}ms"
-    )
-    print(
-        f"ONNX Runtime (C++ Engine)-> p50: {np.percentile(onnx_latencies, 50):.3f}ms | p95: {np.percentile(onnx_latencies, 95):.3f}ms | p99: {np.percentile(onnx_latencies, 99):.3f}ms"
-    )
-    print("================================================================")
+
+    xgb_p50 = np.percentile(xgb_latencies, 50)
+    xgb_p95 = np.percentile(xgb_latencies, 95)
+    xgb_p99 = np.percentile(xgb_latencies, 99)
+    print(f"XGBoost | p50: {xgb_p50:.3f}ms | p95: {xgb_p95:.3f}ms | p99: {xgb_p99:.3f}ms")
+
+    onnx_p50 = np.percentile(onnx_latencies, 50)
+    onnx_p95 = np.percentile(onnx_latencies, 95)
+    onnx_p99 = np.percentile(onnx_latencies, 99)
+    print(f"ONNX    | p50: {onnx_p50:.3f}ms | p95: {onnx_p95:.3f}ms | p99: {onnx_p99:.3f}ms")
 
 
 if __name__ == "__main__":

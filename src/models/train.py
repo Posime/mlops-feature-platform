@@ -4,7 +4,6 @@ import os
 import matplotlib.pyplot as plt
 import mlflow
 import mlflow.xgboost
-import numpy as np
 import pandas as pd
 import yaml
 from sklearn.metrics import (
@@ -135,7 +134,7 @@ def run_training():
 
         os.makedirs("models", exist_ok=True)
         model.save_model("models/model.json")
-        print(f"\n✅ [MODEL PERSISTED] Saved model -> models/model.json")
+        print("\n✅ [MODEL PERSISTED] Saved model -> models/model.json")
 
 
 if __name__ == "__main__":

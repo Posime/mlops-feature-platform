@@ -35,7 +35,8 @@ def register_champion_model():
     # 3. Quality Gate Check
     if val_roc_auc < MIN_ROC_AUC_THRESHOLD:
         print(
-            f"❌ [QUALITY GATE FAILED] val_roc_auc ({val_roc_auc:.4f}) below threshold ({MIN_ROC_AUC_THRESHOLD})"
+            f"❌ [QUALITY GATE FAILED] val_roc_auc ({val_roc_auc:.4f}) "
+            f"below threshold ({MIN_ROC_AUC_THRESHOLD})"
         )
         return
 
@@ -49,7 +50,9 @@ def register_champion_model():
     client.update_model_version(
         name=REGISTERED_MODEL_NAME,
         version=model_version.version,
-        description=f"Candidate model promoted from Run {run_id}. Holdout ROC-AUC: {val_roc_auc:.4f}",
+        description=(
+            f"Candidate model promoted from Run {run_id}. Holdout ROC-AUC: {val_roc_auc:.4f}"
+        ),
     )
 
     # 6. Assign Production Alias (@champion)

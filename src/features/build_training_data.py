@@ -1,5 +1,4 @@
 import os
-from datetime import datetime, timedelta
 
 import pandas as pd
 from feast import FeatureStore

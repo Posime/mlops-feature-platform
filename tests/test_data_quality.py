@@ -1,7 +1,6 @@
 import os
 
 import pandas as pd
-import pandera as pa
 import pytest
 
 from src.features.data_validation import CreditFeatureMatrixSchema

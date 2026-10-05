@@ -53,6 +53,9 @@ state = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # If no container environment variable is set, default locally to localhost:6379
+    if "REDIS_CONNECTION_STRING" not in os.environ:
+        os.environ["REDIS_CONNECTION_STRING"] = "localhost:6379"
     # Feast is the feature store used to pull customer attributes from online
     # storage (Redis in production). The repo path is configurable so the
     # service can work in local and containerized deployments.

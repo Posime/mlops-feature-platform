@@ -2,7 +2,6 @@ import os
 
 import matplotlib.pyplot as plt
 import mlflow
-import numpy as np
 
 MLFLOW_TRACKING_URI = "http://localhost:5000"
 

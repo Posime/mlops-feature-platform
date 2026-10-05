@@ -4,6 +4,6 @@ registry_ttl_sec: 3600
 provider: local
 online_store:
   type: redis
-  connection_string: localhost:6379
+  connection_string: ${REDIS_CONNECTION_STRING}
 offline_store:
   type: file
