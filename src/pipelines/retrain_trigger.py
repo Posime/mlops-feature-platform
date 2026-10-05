@@ -1,7 +1,8 @@
-import mlflow
-from pathlib import Path
 import subprocess
 import sys
+
+# from pathlib import Path
+import mlflow
 from mlflow.tracking import MlflowClient
 
 MODEL_NAME = "credit_risk_xgboost"
@@ -56,10 +57,10 @@ def evaluate_and_promote_challenger():
 
     print("\n⚖️ [MODEL GOVERNANCE] Evaluating Champion vs. Challenger:")
     print(
-        f"  • Champion Model (v{champion_versions.version}) ROC-AUC:   {champion_auc:.4f}"
+        f"  • Champion Model (v{champion_versions.version}) ROC-AUC:   {champion_auc:.4f}"  # noqa: E501
     )
     print(
-        f"  • Challenger Model ({challenger_run.info.run_id[:8]}) ROC-AUC: {challenger_auc:.4f}"
+        f"  • Challenger Model ({challenger_run.info.run_id[:8]}) ROC-AUC: {challenger_auc:.4f}"  # noqa: E501
     )
 
     # Register the newly trained Challenger
@@ -69,12 +70,12 @@ def evaluate_and_promote_challenger():
     # Promotion Gate: Challenger must strictly beat Champion
     if challenger_auc >= champion_auc:
         print(
-            f"🎉 [PROMOTION] Challenger beats Champion. Promoting v{new_version.version} to @champion."
+            f"🎉 [PROMOTION] Challenger beats Champion. Promoting v{new_version.version} to @champion."  # noqa: E501
         )
         client.set_registered_model_alias(MODEL_NAME, "champion", new_version.version)
     else:
         print(
-            f"⚠️ [REJECTED] Challenger (ROC-AUC {challenger_auc:.4f}) did not beat Champion (ROC-AUC {champion_auc:.4f})."
+            f"⚠️ [REJECTED] Challenger (ROC-AUC {challenger_auc:.4f}) did not beat Champion (ROC-AUC {champion_auc:.4f})."  # noqa: E501
         )
         client.set_registered_model_alias(MODEL_NAME, "challenger", new_version.version)
 
@@ -87,7 +88,7 @@ def main():
         sys.exit(0)
 
     print(
-        "🚨 [ORCHESTRATOR] Statistical drift confirmed. Initiating self-healing workflow."
+        "🚨 [ORCHESTRATOR] Statistical drift confirmed. Initiating self-healing workflow."  # noqa: E501
     )
     trigger_dvc_pipeline()
     evaluate_and_promote_challenger()

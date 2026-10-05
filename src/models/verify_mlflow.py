@@ -1,9 +1,11 @@
 import os
+
+import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
-import matplotlib.pyplot as plt
 
 MLFLOW_TRACKING_URI = "http://localhost:5000"
+
 
 def test_tracking_server():
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
@@ -27,9 +29,9 @@ def test_tracking_server():
         # 3. Generate and Log an Artifact Plot
         os.makedirs("mlflow_artifacts", exist_ok=True)
         sample_plot_path = "mlflow_artifacts/test_plot.png"
-        
+
         plt.figure(figsize=(6, 4))
-        plt.plot([1, 2, 3, 4], [0.5, 0.7, 0.82, 0.88], marker='o')
+        plt.plot([1, 2, 3, 4], [0.5, 0.7, 0.82, 0.88], marker="o")
         plt.title("Sample Validation ROC-AUC Curve")
         plt.xlabel("Epoch")
         plt.ylabel("ROC-AUC")
@@ -40,6 +42,7 @@ def test_tracking_server():
         mlflow.log_artifact(sample_plot_path, artifact_path="diagnostics")
 
         print("✅ [METRICS & ARTIFACTS LOGGED] Successfully persisted metadata to Postgres.")
+
 
 if __name__ == "__main__":
     test_tracking_server()

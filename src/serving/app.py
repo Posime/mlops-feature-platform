@@ -1,20 +1,27 @@
-import time
-import os
 import json
+import os
+import time
 from contextlib import asynccontextmanager
-import numpy as np
-from pathlib import Path
-import onnxruntime as rt
 from datetime import datetime, timezone
+from pathlib import Path
+
+import numpy as np
+import onnxruntime as rt
+from fastapi import FastAPI, HTTPException, Response, status
 from feast import FeatureStore
-from fastapi import FastAPI, HTTPException, status, Response
-from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import Counter, Histogram, CollectorRegistry, generate_latest, multiprocess, CONTENT_TYPE_LATEST
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    CollectorRegistry,
+    Counter,
+    Histogram,
+    generate_latest,
+    multiprocess,
+)
 
 from src.serving.schemas import (
     CreditPredictionRequest,
     CreditPredictionResponse,
-    HealthResponse
+    HealthResponse,
 )
 
 # -------------------------------------------------------------------
@@ -24,26 +31,25 @@ from src.serving.schemas import (
 # distribution shifts over time for monitoring and drift checks.
 # -------------------------------------------------------------------
 PREDICTION_COUNTER = Counter(
-    "model_prediction_total",
-    "Total number of model predictions served",
-    ["decision"]
+    "model_prediction_total", "Total number of model predictions served", ["decision"]
 )
 
 PREDICTION_LATENCY_HISTOGRAM = Histogram(
     "model_prediction_latency_seconds",
     "Time spent running feature retrieval and model inference",
-    buckets=[0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+    buckets=[0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
 )
 
 PREDICTION_PROBABILITY_HISTOGRAM = Histogram(
     "model_prediction_probability",
     "Distribution of output default probabilities (for drift detection)",
-    buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
 )
 
 # Keep initialization state in a single dictionary so the FastAPI app can
 # share a single Feast client and ONNX inference session across requests.
 state = {}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -65,9 +71,7 @@ async def lifespan(app: FastAPI):
     session_options.graph_optimization_level = rt.GraphOptimizationLevel.ORT_ENABLE_ALL
 
     state["onnx_session"] = rt.InferenceSession(
-        onnx_path,
-        sess_options=session_options,
-        providers=["CPUExecutionProvider"]
+        onnx_path, sess_options=session_options, providers=["CPUExecutionProvider"]
     )
     state["input_name"] = state["onnx_session"].get_inputs()[0].name
 
@@ -77,7 +81,7 @@ async def lifespan(app: FastAPI):
     try:
         _ = state["feature_store"].get_online_features(
             features=["user_credit_features:credit_score"],
-            entity_rows=[{"user_id": 1000}]
+            entity_rows=[{"user_id": 1000}],
         )
         dummy_tensor = np.zeros((1, 4), dtype=np.float32)
         _ = state["onnx_session"].run(None, {state["input_name"]: dummy_tensor})
@@ -87,9 +91,11 @@ async def lifespan(app: FastAPI):
     yield
     state.clear()
 
+
 # Drift telemetry & logging helpers directory
 LOG_DIR = Path("data/inference_logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def log_inference_event(payload: dict):
     """Appends prediction event to daily JSONL buffer for drift detection."""
@@ -98,11 +104,9 @@ def log_inference_event(payload: dict):
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(payload) + "\n")
 
-app = FastAPI(
-    title="Real-Time Credit Decisioning Engine",
-    version="1.0.0",
-    lifespan=lifespan
-)
+
+app = FastAPI(title="Real-Time Credit Decisioning Engine", version="1.0.0", lifespan=lifespan)
+
 
 @app.get("/metrics")
 def metrics():
@@ -124,11 +128,15 @@ def health_check():
     return HealthResponse(
         status="healthy" if ready else "unhealthy",
         redis_connected=ready,
-        onnx_loaded=session is not None
+        onnx_loaded=session is not None,
     )
 
 
-@app.post("/v1/predict", response_model=CreditPredictionResponse, status_code=status.HTTP_200_OK)
+@app.post(
+    "/v1/predict",
+    response_model=CreditPredictionResponse,
+    status_code=status.HTTP_200_OK,
+)
 def predict(request: CreditPredictionRequest):
     # Measure end-to-end latency so we can track how much time is spent fetching
     # data and running inference for each API call.
@@ -139,7 +147,7 @@ def predict(request: CreditPredictionRequest):
     if not store or not session:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Serving engines not initialized."
+            detail="Serving engines not initialized.",
         )
 
     # 1. Pull the online feature values for this user from Feast/Redis.
@@ -149,51 +157,55 @@ def predict(request: CreditPredictionRequest):
             features=[
                 "user_credit_features:account_balance",
                 "user_credit_features:credit_score",
-                "user_credit_features:failed_transactions_24h"
+                "user_credit_features:failed_transactions_24h",
             ],
-            entity_rows=[{"user_id": request.user_id}]
+            entity_rows=[{"user_id": request.user_id}],
         ).to_dict()
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Feast Redis retrieval failure: {str(e)}"
+            detail=f"Feast Redis retrieval failure: {str(e)}",
         )
 
-    # 2. Normalize missing values before inference. The model expects numeric
-    # inputs, so defaults are applied when the feature store returns nulls.
-    account_balance = feast_response["account_balance"][0]
-    credit_score = feast_response["credit_score"][0]
-    failed_tx = feast_response["failed_transactions_24h"][0]
+    # 2. Safely extract features with fallback to default baselines
+    def get_feature(key: str, default: float) -> float:
+        # Check both the namespaced Feast key and bare column name
+        val = feast_response.get(f"user_credit_features:{key}") or feast_response.get(key)
+        if val and len(val) > 0 and val[0] is not None:
+            return float(val[0])
+        return default
 
-    account_balance = float(account_balance) if account_balance is not None else 0.0
-    credit_score = float(credit_score) if credit_score is not None else 600.0
-    failed_tx = float(failed_tx) if failed_tx is not None else 0.0
+    account_balance = get_feature("account_balance", 0.0)
+    credit_score = get_feature("credit_score", 600.0)
+    failed_tx = get_feature("failed_transactions_24h", 0.0)
 
     retrieved_features = {
         "transaction_amount": request.transaction_amount,
         "account_balance": account_balance,
         "credit_score": credit_score,
-        "failed_transactions_24h": failed_tx
+        "failed_transactions_24h": failed_tx,
     }
 
     # 3. Build the feature vector in the exact order expected by the ONNX model.
     # The model output is a probability distribution; the positive class is the
     # probability of default, which we use to decide whether to approve or reject.
-    input_tensor = np.array([[
-        request.transaction_amount,
-        account_balance,
-        credit_score,
-        failed_tx
-    ]], dtype=np.float32)
+    input_tensor = np.array(
+        [[request.transaction_amount, account_balance, credit_score, failed_tx]],
+        dtype=np.float32,
+    )
 
     try:
         outputs = session.run(None, {state["input_name"]: input_tensor})
         probabilities = outputs[1]
-        default_prob = float(probabilities[0][1]) if isinstance(probabilities, list) else float(probabilities[0, 1])
+        default_prob = (
+            float(probabilities[0][1])
+            if isinstance(probabilities, list)
+            else float(probabilities[0, 1])
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"ONNX inference failure: {str(e)}"
+            detail=f"ONNX inference failure: {str(e)}",
         )
 
     duration_sec = time.perf_counter() - t_start
@@ -207,21 +219,23 @@ def predict(request: CreditPredictionRequest):
     PREDICTION_PROBABILITY_HISTOGRAM.observe(default_prob)
 
     # Record telemetry for drift analysis
-    log_inference_event({
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "user_id": request.user_id,
-        "transaction_amount": request.transaction_amount,
-        "account_balance": account_balance,
-        "credit_score": credit_score,
-        "failed_transactions_24h": failed_tx,
-        "default_probability": default_prob,
-        "is_default": is_default
-    })
+    log_inference_event(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "user_id": request.user_id,
+            "transaction_amount": request.transaction_amount,
+            "account_balance": account_balance,
+            "credit_score": credit_score,
+            "failed_transactions_24h": failed_tx,
+            "default_probability": default_prob,
+            "is_default": is_default,
+        }
+    )
 
     return CreditPredictionResponse(
         user_id=request.user_id,
         default_probability=round(default_prob, 4),
         is_default=is_default,
         latency_ms=round(total_latency_ms, 2),
-        retrieved_features=retrieved_features
+        retrieved_features=retrieved_features,
     )

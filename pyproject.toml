@@ -27,6 +27,14 @@ dependencies = [
 ]
 [tool.pytest.ini_options]
 pythonpath = ["."]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
 
 [dependency-groups]
 dev = [
@@ -35,3 +43,24 @@ dev = [
     "locust>=2.46.5",
     "ruff>=0.16.10",
 ]
+
+[tool.ruff]
+line-length = 99
+target-version = "py311"
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "data",
+    "mlruns",
+    "mlflow_artifacts",
+    "reports",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = []
+
+
+[tool.ruff.lint.per-file-ignores]
+"src/features/materialize.py" = ["E402"]

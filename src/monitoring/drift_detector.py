@@ -7,9 +7,7 @@ import pandas as pd
 from scipy.stats import ks_2samp
 
 
-def calculate_psi(
-    baseline: np.ndarray, target: np.ndarray, num_buckets: int = 10
-) -> float:
+def calculate_psi(baseline: np.ndarray, target: np.ndarray, num_buckets: int = 10) -> float:
     """Calculates the Population Stability Index (PSI) between two distributions."""
     if len(baseline) == 0 or len(target) == 0:
         return 0.0
@@ -36,7 +34,7 @@ def run_drift_analysis(
     psi_threshold: float = 0.25,
     ks_alpha: float = 0.05,
 ) -> dict:
-    """Evaluates covariate and prediction drift against the baseline training dataset."""
+    """Evaluates covariate and prediction drift against the baseline training dataset."""  # noqa: E501
     baseline_path = Path(baseline_parquet_path)
     logs_dir = Path(inference_logs_dir)
 
@@ -66,7 +64,7 @@ def run_drift_analysis(
 
     if len(records) < 20:
         print(
-            f"⚠️ Insufficient records ({len(records)} found, minimum 20 needed) for statistical power."
+            f"⚠️ Insufficient records ({len(records)} found, minimum 20 needed) for statistical power."  # noqa: E501
         )
         return {"status": "insufficient_data"}
 
@@ -127,7 +125,7 @@ if __name__ == "__main__":
     report = run_drift_analysis()
     if report.get("retrain_recommended"):
         print(
-            "🚨 ACTION REQUIRED: Critical drift detected. Triggering automated retraining flow."
+            "🚨 ACTION REQUIRED: Critical drift detected. Triggering automated retraining flow."  # noqa: E501
         )
         sys.exit(1)
     else:

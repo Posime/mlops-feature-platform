@@ -1,5 +1,6 @@
 import random
-from locust import HttpUser, task, between
+
+from locust import HttpUser, between, task
 
 
 class CreditInferenceUser(HttpUser):
@@ -10,7 +11,7 @@ class CreditInferenceUser(HttpUser):
     def predict_credit_risk(self):
         payload = {
             "user_id": random.randint(1000, 1050),
-            "transaction_amount": round(random.uniform(10.0, 5000.0), 2)
+            "transaction_amount": round(random.uniform(10.0, 5000.0), 2),
         }
         self.client.post("/v1/predict", json=payload, name="/v1/predict")
 

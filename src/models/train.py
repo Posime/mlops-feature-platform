@@ -1,29 +1,32 @@
-import os
-import yaml
 import json
+import os
+
+import matplotlib.pyplot as plt
 import mlflow
 import mlflow.xgboost
-import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from xgboost import XGBClassifier
-from sklearn.model_selection import train_test_split
+import pandas as pd
+import yaml
 from sklearn.metrics import (
-    roc_auc_score,
+    ConfusionMatrixDisplay,
+    RocCurveDisplay,
     average_precision_score,
     f1_score,
     precision_score,
     recall_score,
-    ConfusionMatrixDisplay,
-    RocCurveDisplay
+    roc_auc_score,
 )
+from sklearn.model_selection import train_test_split
+from xgboost import XGBClassifier
 
 MLFLOW_TRACKING_URI = "http://localhost:5000"
 EXPERIMENT_NAME = "credit_default_training"
 
+
 def load_params():
     with open("params.yaml", "r") as f:
         return yaml.safe_load(f)
+
 
 def run_training():
     params = load_params()
@@ -33,23 +36,26 @@ def run_training():
     # 1. Load Processed Feature Matrix
     data_path = "data/processed/train_features.parquet"
     if not os.path.exists(data_path):
-        raise FileNotFoundError(f"Missing training data at {data_path}. Run pipeline ingestion first.")
+        raise FileNotFoundError(
+            f"Missing training data at {data_path}. Run pipeline ingestion first."
+        )
 
     df = pd.read_parquet(data_path)
-    
+
     # 2. Separate Features and Target
     drop_cols = ["user_id", "event_timestamp", target_col]
     feature_cols = [col for col in df.columns if col not in drop_cols]
-    
+
     X = df[feature_cols]
     y = df[target_col]
 
     # 3. Stratified Train-Test Split
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
+        X,
+        y,
         test_size=train_params["test_size"],
         random_state=train_params["random_state"],
-        stratify=y
+        stratify=y,
     )
 
     # 4. Connect to MLflow & Enable Autologging (with log_models=False for explicit saving)
@@ -69,9 +75,9 @@ def run_training():
             subsample=train_params["subsample"],
             scale_pos_weight=train_params["scale_pos_weight"],
             random_state=train_params["random_state"],
-            eval_metric="logloss"
+            eval_metric="logloss",
         )
-        
+
         model.fit(X_train, y_train)
 
         # 6. Compute Holdout Evaluation Metrics
@@ -83,7 +89,7 @@ def run_training():
             "val_pr_auc": float(average_precision_score(y_test, y_prob)),
             "val_f1_score": float(f1_score(y_test, y_pred)),
             "val_precision": float(precision_score(y_test, y_pred, zero_division=0)),
-            "val_recall": float(recall_score(y_test, y_pred))
+            "val_recall": float(recall_score(y_test, y_pred)),
         }
 
         print("\n📈 [HOLDOUT EVALUATION METRICS]")
@@ -96,7 +102,7 @@ def run_training():
 
         # 7. Generate & Save Diagnostic Plots
         os.makedirs("reports/figures", exist_ok=True)
-        
+
         # ROC Curve
         fig, ax = plt.subplots(figsize=(6, 4))
         RocCurveDisplay.from_predictions(y_test, y_prob, ax=ax, name="XGBoost")
@@ -119,9 +125,7 @@ def run_training():
 
         # 8. Log Model Artifact
         mlflow.xgboost.log_model(
-            xgb_model=model,
-            artifact_path="model",
-            input_example=X_train.head(3)
+            xgb_model=model, artifact_path="model", input_example=X_train.head(3)
         )
 
         # 9. Save Local Artifacts
@@ -132,6 +136,7 @@ def run_training():
         os.makedirs("models", exist_ok=True)
         model.save_model("models/model.json")
         print(f"\n✅ [MODEL PERSISTED] Saved model -> models/model.json")
+
 
 if __name__ == "__main__":
     run_training()

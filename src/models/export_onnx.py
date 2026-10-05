@@ -1,10 +1,12 @@
 import os
+
 import numpy as np
 import onnx
 import onnxruntime as rt
-from xgboost import XGBClassifier
 from onnxmltools import convert_xgboost
 from onnxmltools.convert.common.data_types import FloatTensorType
+from xgboost import XGBClassifier
+
 
 def export_to_onnx():
     model_path = "models/model.json"
@@ -24,11 +26,7 @@ def export_to_onnx():
     initial_types = [("float_input", FloatTensorType([None, 4]))]
 
     print("🔄 [ONNX EXPORT] Converting computation graph to ONNX format...")
-    onnx_model = convert_xgboost(
-        model,
-        initial_types=initial_types,
-        target_opset=15
-    )
+    onnx_model = convert_xgboost(model, initial_types=initial_types, target_opset=15)
 
     # Save to disk
     os.makedirs("models", exist_ok=True)
@@ -39,9 +37,10 @@ def export_to_onnx():
     session = rt.InferenceSession(onnx_output_path, providers=["CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
     dummy_input = np.array([[120.50, 4500.0, 720.0, 0.0]], dtype=np.float32)
-    
+
     outputs = session.run(None, {input_name: dummy_input})
     print(f"🧪 [ONNX SANITY CHECK] Prediction Probabilities: {outputs[1]}")
+
 
 if __name__ == "__main__":
     export_to_onnx()
