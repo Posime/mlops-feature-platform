@@ -1,31 +1,31 @@
 import json
+import sys
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from scipy.stats import ks_2samp
 
 
-def calculate_psi(baseline: np.ndarray, target: np.ndarray, num_buckets: int = 10) -> float:
+def calculate_psi(
+    baseline: np.ndarray, target: np.ndarray, num_buckets: int = 10
+) -> float:
     """Calculates the Population Stability Index (PSI) between two distributions."""
-    # Ensure minimum sample sizes
     if len(baseline) == 0 or len(target) == 0:
         return 0.0
 
-    # Calculate bucket percentiles using baseline
     percentiles = np.linspace(0, 100, num_buckets + 1)
     bucket_bounds = np.percentile(baseline, percentiles)
     bucket_bounds[0] = -np.inf
     bucket_bounds[-1] = np.inf
 
-    # Bucket counts
     baseline_counts, _ = np.histogram(baseline, bins=bucket_bounds)
     target_counts, _ = np.histogram(target, bins=bucket_bounds)
 
-    # Convert to fractions with Laplace smoothing to avoid division by zero
+    # Laplace smoothing to prevent division by zero
     p = np.where(baseline_counts == 0, 1e-4, baseline_counts) / len(baseline)
     q = np.where(target_counts == 0, 1e-4, target_counts) / len(target)
 
-    # Compute PSI
     psi_value = np.sum((p - q) * np.log(p / q))
     return float(psi_value)
 
@@ -34,7 +34,7 @@ def run_drift_analysis(
     baseline_parquet_path: str = "data/processed/train_features.parquet",
     inference_logs_dir: str = "data/inference_logs",
     psi_threshold: float = 0.25,
-    ks_alpha: float = 0.05
+    ks_alpha: float = 0.05,
 ) -> dict:
     """Evaluates covariate and prediction drift against the baseline training dataset."""
     baseline_path = Path(baseline_parquet_path)
@@ -45,7 +45,6 @@ def run_drift_analysis(
 
     baseline_df = pd.read_parquet(baseline_path)
 
-    # Load and concatenate all recorded inference log files
     log_files = list(logs_dir.glob("inferences_*.jsonl"))
     if not log_files:
         print("⚠️ No inference logs found for drift analysis.")
@@ -54,12 +53,21 @@ def run_drift_analysis(
     records = []
     for file in log_files:
         with open(file, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    records.append(json.loads(line))
+            for line_no, raw_line in enumerate(f, start=1):
+                clean_line = raw_line.strip()
+                if not clean_line:
+                    continue
+                try:
+                    records.append(json.loads(clean_line))
+                except json.JSONDecodeError:
+                    # Gracefully bypass partially written or malformed records
+                    print(f"⚠️ Skipping malformed JSON line {line_no} in {file.name}")
+                    continue
 
     if len(records) < 20:
-        print(f"⚠️ Insufficient records ({len(records)} found, minimum 20 needed) for statistical power.")
+        print(
+            f"⚠️ Insufficient records ({len(records)} found, minimum 20 needed) for statistical power."
+        )
         return {"status": "insufficient_data"}
 
     target_df = pd.DataFrame(records)
@@ -68,27 +76,26 @@ def run_drift_analysis(
         "transaction_amount",
         "account_balance",
         "credit_score",
-        "failed_transactions_24h"
+        "failed_transactions_24h",
     ]
 
     drift_report = {
         "timestamp": pd.Timestamp.now().isoformat(),
         "sample_size": len(target_df),
         "features": {},
-        "retrain_recommended": False
+        "retrain_recommended": False,
     }
 
     print("\n🔍 ================== STATISTICAL DRIFT REPORT ==================")
-    print(f"Analyzing {len(target_df)} live inferences against {len(baseline_df)} baseline records\n")
+    print(
+        f"Analyzing {len(target_df)} live inferences against {len(baseline_df)} baseline records\n"
+    )
 
     for col in features:
         base_vals = baseline_df[col].dropna().values
         target_vals = target_df[col].dropna().values
 
-        # 1. KS Test (Covariate Shift)
         ks_stat, ks_p_val = ks_2samp(base_vals, target_vals)
-
-        # 2. Population Stability Index (PSI)
         psi_val = calculate_psi(base_vals, target_vals)
 
         is_drifted = (psi_val >= psi_threshold) or (ks_p_val < ks_alpha)
@@ -97,7 +104,7 @@ def run_drift_analysis(
             "psi": round(psi_val, 4),
             "ks_statistic": round(float(ks_stat), 4),
             "ks_p_value": round(float(ks_p_val), 4),
-            "drift_detected": bool(is_drifted)
+            "drift_detected": bool(is_drifted),
         }
 
         flag = "🚨 DRIFT" if is_drifted else "✅ STABLE"
@@ -108,7 +115,6 @@ def run_drift_analysis(
 
     print("=================================================================\n")
 
-    # Save evaluation report
     report_path = Path("reports/drift_report.json")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with open(report_path, "w", encoding="utf-8") as f:
@@ -120,8 +126,10 @@ def run_drift_analysis(
 if __name__ == "__main__":
     report = run_drift_analysis()
     if report.get("retrain_recommended"):
-        print("🚨 ACTION REQUIRED: Critical drift detected. Triggering automated retraining flow.")
-        exit(1)
+        print(
+            "🚨 ACTION REQUIRED: Critical drift detected. Triggering automated retraining flow."
+        )
+        sys.exit(1)
     else:
         print("✅ Distributions within acceptable bounds. No retraining required.")
-        exit(0)
+        sys.exit(0)

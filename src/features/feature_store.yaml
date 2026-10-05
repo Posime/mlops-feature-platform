@@ -1,9 +1,9 @@
 project: credit_scoring_platform
-registry: registry.db #../../data/registry.db
+registry: registry.db 
 registry_ttl_sec: 3600
 provider: local
 online_store:
   type: redis
-  connection_string: "redis:6379"
+  connection_string: ${REDIS_CONNECTION_STRING}
 offline_store:
   type: file

@@ -1,51 +1,48 @@
 services:
+  # -----------------------------------------------------------------
+  # 1. Redis: In-Memory Online Feature Store
+  # -----------------------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: mlops_redis
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
-  postgres:
-    image: postgres:15-alpine
-    container_name: mlops_postgres
-    environment:
-      POSTGRES_USER: mlops_user
-      POSTGRES_PASSWORD: mlops_password
-      POSTGRES_DB: mlflow_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mlops_user -d mlflow_db"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
+  # -----------------------------------------------------------------
+  # 2. MLflow: SQLite-Backed Experiment Tracking & Registry
+  # -----------------------------------------------------------------
   mlflow:
-    build:
-      context: .
-      dockerfile: Dockerfile.mlflow
+    image: ghcr.io/mlflow/mlflow:v3.15.1
     container_name: mlops_mlflow
     ports:
       - "5000:5000"
     volumes:
-      - ./mlflow_artifacts:/mlflow/artifacts
-    depends_on:
-      postgres:
-        condition: service_healthy
-    command: >
-      python -m mlflow server
-      --backend-store-uri postgresql://mlops_user:mlops_password@postgres:5432/mlflow_db
-      --default-artifact-root /mlflow/artifacts
-      --host 0.0.0.0
-      --port 5000
+      - ./mlruns:/mlruns
+      - ./models:/models
+    entrypoint:
+      - mlflow
+      - server
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "5000"
+      - --backend-store-uri
+      - sqlite:////mlruns/mlflow.db
+      - --default-artifact-root
+      - /mlruns
+    restart: unless-stopped
 
+  # -----------------------------------------------------------------
+  # 3. Serving Engine: FastAPI Real-Time Inference
+  # -----------------------------------------------------------------
   serving:
     build:
       context: .
@@ -56,16 +53,23 @@ services:
     environment:
       - FEAST_REPO_PATH=/app/src/features
       - MODEL_PATH=/app/models/model.onnx
+      - REDIS_CONNECTION_STRING=redis:6379
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
       - WEB_CONCURRENCY=4
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
     volumes:
       - ./src/features:/app/src/features
       - ./src/serving:/app/src/serving
+      - ./models:/app/models
       - ./data/inference_logs:/app/data/inference_logs
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
 
+  # -----------------------------------------------------------------
+  # 4. Prometheus: Metrics Telemetry & Scraper
+  # -----------------------------------------------------------------
   prometheus:
     image: prom/prometheus:v2.53.0
     container_name: mlops_prometheus
@@ -73,9 +77,11 @@ services:
       - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
     depends_on:
       - serving
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  redis_data:
+  prometheus_data:
