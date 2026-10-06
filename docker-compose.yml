@@ -9,6 +9,8 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - mlops-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -63,6 +65,8 @@ services:
       - ./src/serving:/app/src/serving
       - ./models:/app/models
       - ./data/inference_logs:/app/data/inference_logs
+    networks:
+      - mlops-network  
     depends_on:
       redis:
         condition: service_healthy
@@ -79,10 +83,35 @@ services:
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
+    networks:
+      - mlops-network
     depends_on:
       - serving
     restart: unless-stopped
 
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mlops_grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - mlops-network
+    depends_on:
+      - prometheus
+
+networks:
+  mlops-network:
+    driver: bridge
+
 volumes:
   redis_data:
   prometheus_data:
+  grafana_data:
