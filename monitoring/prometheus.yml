@@ -7,3 +7,6 @@ scrape_configs:
     metrics_path: "/metrics"
     static_configs:
       - targets: ["serving:8000"]
+        labels:
+          environment: "local-compose"
+          service: "credit-scoring-service"

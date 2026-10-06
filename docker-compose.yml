@@ -47,6 +47,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.serving
+    image: mlops-serving:latest
     container_name: mlops_serving
     ports:
       - "8000:8000"

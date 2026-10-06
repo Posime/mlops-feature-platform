@@ -7,12 +7,14 @@ from pathlib import Path
 
 import numpy as np
 import onnxruntime as rt
+import prometheus_client
 from fastapi import FastAPI, HTTPException, Response, status
 from feast import FeatureStore
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
     Counter,
+    Gauge,
     Histogram,
     generate_latest,
     multiprocess,
@@ -24,48 +26,103 @@ from src.serving.schemas import (
     HealthResponse,
 )
 
-# -------------------------------------------------------------------
-# Prometheus metric definitions used to monitor production model behavior.
-# These counters/histograms make it easy to track how often we reject or
-# approve credit, how long prediction calls take, and how the probability
-# distribution shifts over time for monitoring and drift checks.
-# -------------------------------------------------------------------
-PREDICTION_COUNTER = Counter(
-    "model_prediction_total", "Total number of model predictions served", ["decision"]
+# =============================================================================
+# 1. METRIC INSTRUMENTATION: PILLAR A - PREDICTION COUNTERS
+# =============================================================================
+# Tracks total inference invocations partitioned by status ("success", "feast_error",
+# "onnx_error") and final business classification ("true", "false", "none").
+PREDICTION_REQUESTS_TOTAL = Counter(
+    name="credit_inference_requests_total",
+    documentation="Cumulative count of credit scoring inference API requests",
+    labelnames=["status", "is_default"],
 )
 
-PREDICTION_LATENCY_HISTOGRAM = Histogram(
-    "model_prediction_latency_seconds",
-    "Time spent running feature retrieval and model inference",
-    buckets=[0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+# =============================================================================
+# 1. METRIC INSTRUMENTATION: PILLAR B - LATENCY HISTOGRAMS
+# =============================================================================
+# Measures fine-grained duration across distinct pipeline stages (Feast online lookup,
+# ONNX graph execution, and full end-to-end request duration).
+# Buckets are aligned to sub-10ms operational targets (p50 <= 5ms, p95 <= 10ms, p99 <= 25ms).
+INFERENCE_LATENCY_SECONDS = Histogram(
+    name="credit_inference_latency_seconds",
+    documentation="Execution latency across inference stages in seconds",
+    labelnames=["stage"],
+    buckets=(
+        0.001,  # 1.0ms
+        0.0025,  # 2.5ms
+        0.005,  # 5.0ms (Target p50)
+        0.010,  # 10.0ms (Target p95)
+        0.025,  # 25.0ms (Target p99)
+        0.050,  # 50.0ms
+        0.100,  # 100.0ms
+        0.250,  # 250.0ms
+        0.500,  # 500.0ms
+    ),
 )
 
-PREDICTION_PROBABILITY_HISTOGRAM = Histogram(
-    "model_prediction_probability",
-    "Distribution of output default probabilities (for drift detection)",
-    buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+# =============================================================================
+# 1. METRIC INSTRUMENTATION: PILLAR C - FEATURE & PROBABILITY DISTRIBUTIONS
+# =============================================================================
+# Tracks the distribution of calculated probabilities emitted by ONNX to detect
+# prediction drift against training validation baselines.
+MODEL_OUTPUT_PROBABILITY_HISTOGRAM = Histogram(
+    name="credit_prediction_probability_distribution",
+    documentation="Distribution of credit default probabilities emitted by the ONNX model",
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 )
 
-# Keep initialization state in a single dictionary so the FastAPI app can
-# share a single Feast client and ONNX inference session across requests.
+# Tracks input feature values to observe distribution shift and sudden spikes in real-time.
+FEATURE_TRANSACTION_AMOUNT_HISTOGRAM = Histogram(
+    name="credit_feature_transaction_amount",
+    documentation="Distribution of incoming transaction amounts requested",
+    buckets=(10.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0),
+)
+
+FEATURE_CREDIT_SCORE_HISTOGRAM = Histogram(
+    name="credit_feature_retrieved_credit_score",
+    documentation="Distribution of credit scores retrieved from Feast Redis",
+    buckets=(300.0, 450.0, 550.0, 600.0, 650.0, 700.0, 750.0, 800.0, 850.0),
+)
+
+# =============================================================================
+# 1. METRIC INSTRUMENTATION: PILLAR D - SYSTEM HEALTH & DEPENDENCY GAUGES
+# =============================================================================
+# Exposes instantaneous binary health states for upstream dependencies:
+# 1.0 = healthy / connected, 0.0 = degraded / disconnected.
+STORE_CONNECTION_GAUGE = Gauge(
+    name="credit_store_redis_connected",
+    documentation="Health status of Feast Redis connection (1=Connected, 0=Disconnected)",
+)
+
+MODEL_LOADED_GAUGE = Gauge(
+    name="credit_model_onnx_loaded",
+    documentation="Health status of ONNX runtime session (1=Loaded, 0=Unloaded)",
+)
+
+
+# In-memory runtime state shared across requests
 state = {}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # If no container environment variable is set, default locally to localhost:6379
+    # Set fallback for local testing environments
     if "REDIS_CONNECTION_STRING" not in os.environ:
         os.environ["REDIS_CONNECTION_STRING"] = "localhost:6379"
-    # Feast is the feature store used to pull customer attributes from online
-    # storage (Redis in production). The repo path is configurable so the
-    # service can work in local and containerized deployments.
-    feast_repo_path = os.getenv("FEAST_REPO_PATH", "src/features")
-    state["feature_store"] = FeatureStore(repo_path=feast_repo_path)
 
-    # Load the compiled model once at startup instead of per request; this keeps
-    # latency low and avoids re-reading the model artifact for every prediction.
+    # Initialize Feast Online Feature Store
+    feast_repo_path = os.getenv("FEAST_REPO_PATH", "src/features")
+    try:
+        state["feature_store"] = FeatureStore(repo_path=feast_repo_path)
+        STORE_CONNECTION_GAUGE.set(1.0)
+    except Exception as exc:
+        STORE_CONNECTION_GAUGE.set(0.0)
+        print(f"❌ [FEAST INIT ERROR] Failed to connect to store: {exc}")
+
+    # Initialize ONNX Runtime Session
     onnx_path = os.getenv("MODEL_PATH", "models/model.onnx")
     if not os.path.exists(onnx_path):
+        MODEL_LOADED_GAUGE.set(0.0)
         raise RuntimeError(f"Missing ONNX model artifact at '{onnx_path}'.")
 
     session_options = rt.SessionOptions()
@@ -77,10 +134,9 @@ async def lifespan(app: FastAPI):
         onnx_path, sess_options=session_options, providers=["CPUExecutionProvider"]
     )
     state["input_name"] = state["onnx_session"].get_inputs()[0].name
+    MODEL_LOADED_GAUGE.set(1.0)
 
-    # Warm the model and feature store before serving traffic so the first user
-    # request does not pay the cold-start cost. Failures here are logged only as
-    # warnings to avoid crashing the application during startup.
+    # Model warm-up run to prime caches
     try:
         _ = state["feature_store"].get_online_features(
             features=["user_credit_features:credit_score"],
@@ -88,14 +144,17 @@ async def lifespan(app: FastAPI):
         )
         dummy_tensor = np.zeros((1, 4), dtype=np.float32)
         _ = state["onnx_session"].run(None, {state["input_name"]: dummy_tensor})
-    except Exception as e:
-        print(f"⚠️ [SERVING INIT] Warm-up warning: {e}")
+    except Exception as exc:
+        print(f"⚠️ [SERVING INIT] Warm-up warning: {exc}")
 
     yield
+
     state.clear()
+    STORE_CONNECTION_GAUGE.set(0.0)
+    MODEL_LOADED_GAUGE.set(0.0)
 
 
-# Drift telemetry & logging helpers directory
+# Telemetry logging setup
 LOG_DIR = Path("data/inference_logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -108,22 +167,28 @@ def log_inference_event(payload: dict):
         f.write(json.dumps(payload) + "\n")
 
 
-app = FastAPI(title="Real-Time Credit Decisioning Engine", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Real-Time Credit Decisioning Engine",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 
 @app.get("/metrics")
-def metrics():
-    # Expose a custom registry for Prometheus so we can aggregate the metrics
-    # from the multi-process app server configuration used in production.
-    registry = CollectorRegistry()
-    multiprocess.MultiProcessCollector(registry)
-    return Response(content=generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
+async def metrics():
+    """Prometheus telemetry scrape endpoint supporting multiprocess and standalone modes."""
+    if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        data = generate_latest(registry)
+    else:
+        data = generate_latest(prometheus_client.REGISTRY)
+
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/healthz", response_model=HealthResponse, status_code=status.HTTP_200_OK)
 def health_check():
-    # A simple readiness check so deployment systems know whether the feature
-    # store and ONNX runtime are ready to accept requests.
     store = state.get("feature_store")
     session = state.get("onnx_session")
     ready = (store is not None) and (session is not None)
@@ -140,9 +205,7 @@ def health_check():
     response_model=CreditPredictionResponse,
     status_code=status.HTTP_200_OK,
 )
-def predict(request: CreditPredictionRequest):
-    # Measure end-to-end latency so we can track how much time is spent fetching
-    # data and running inference for each API call.
+async def predict(request: CreditPredictionRequest):
     t_start = time.perf_counter()
     store: FeatureStore = state.get("feature_store")
     session: rt.InferenceSession = state.get("onnx_session")
@@ -153,8 +216,13 @@ def predict(request: CreditPredictionRequest):
             detail="Serving engines not initialized.",
         )
 
-    # 1. Pull the online feature values for this user from Feast/Redis.
-    # These fields are required by the model and are looked up by user_id.
+    # Record incoming request feature distribution
+    FEATURE_TRANSACTION_AMOUNT_HISTOGRAM.observe(request.transaction_amount)
+
+    # -----------------------------------------------------------------
+    # 1. Feature Retrieval & Instrumentation
+    # -----------------------------------------------------------------
+    t_feast_start = time.perf_counter()
     try:
         feast_response = store.get_online_features(
             features=[
@@ -164,15 +232,21 @@ def predict(request: CreditPredictionRequest):
             ],
             entity_rows=[{"user_id": request.user_id}],
         ).to_dict()
-    except Exception as e:
+        INFERENCE_LATENCY_SECONDS.labels(stage="feast_lookup").observe(
+            time.perf_counter() - t_feast_start
+        )
+    except Exception as exc:
+        PREDICTION_REQUESTS_TOTAL.labels(status="feast_error", is_default="none").inc()
+        STORE_CONNECTION_GAUGE.set(0.0)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Feast Redis retrieval failure: {str(e)}",
+            detail=f"Feast Redis retrieval failure: {str(exc)}",
         )
 
-    # 2. Safely extract features with fallback to default baselines
+    # -----------------------------------------------------------------
+    # 2. Extract & Observe Features
+    # -----------------------------------------------------------------
     def get_feature(key: str, default: float) -> float:
-        # Check both the namespaced Feast key and bare column name
         val = feast_response.get(f"user_credit_features:{key}") or feast_response.get(key)
         if val and len(val) > 0 and val[0] is not None:
             return float(val[0])
@@ -182,6 +256,9 @@ def predict(request: CreditPredictionRequest):
     credit_score = get_feature("credit_score", 600.0)
     failed_tx = get_feature("failed_transactions_24h", 0.0)
 
+    # Observe retrieved feature distribution for drift monitoring
+    FEATURE_CREDIT_SCORE_HISTOGRAM.observe(credit_score)
+
     retrieved_features = {
         "transaction_amount": request.transaction_amount,
         "account_balance": account_balance,
@@ -189,14 +266,15 @@ def predict(request: CreditPredictionRequest):
         "failed_transactions_24h": failed_tx,
     }
 
-    # 3. Build the feature vector in the exact order expected by the ONNX model.
-    # The model output is a probability distribution; the positive class is the
-    # probability of default, which we use to decide whether to approve or reject.
+    # -----------------------------------------------------------------
+    # 3. Model Scoring & Latency Instrumentation
+    # -----------------------------------------------------------------
     input_tensor = np.array(
         [[request.transaction_amount, account_balance, credit_score, failed_tx]],
         dtype=np.float32,
     )
 
+    t_onnx_start = time.perf_counter()
     try:
         outputs = session.run(None, {state["input_name"]: input_tensor})
         probabilities = outputs[1]
@@ -205,23 +283,33 @@ def predict(request: CreditPredictionRequest):
             if isinstance(probabilities, list)
             else float(probabilities[0, 1])
         )
-    except Exception as e:
+        INFERENCE_LATENCY_SECONDS.labels(stage="onnx_inference").observe(
+            time.perf_counter() - t_onnx_start
+        )
+    except Exception as exc:
+        PREDICTION_REQUESTS_TOTAL.labels(status="onnx_error", is_default="none").inc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"ONNX inference failure: {str(e)}",
+            detail=f"ONNX inference failure: {str(exc)}",
         )
 
     duration_sec = time.perf_counter() - t_start
     total_latency_ms = duration_sec * 1000.0
-    is_default = default_prob >= 0.5
+    is_default = bool(default_prob >= 0.5)
 
-    # 4. Emit metrics for operational monitoring. This helps us understand model
-    # behavior, performance, and probability drift in production.
-    PREDICTION_COUNTER.labels(decision="default" if is_default else "non_default").inc()
-    PREDICTION_LATENCY_HISTOGRAM.observe(duration_sec)
-    PREDICTION_PROBABILITY_HISTOGRAM.observe(default_prob)
+    # -----------------------------------------------------------------
+    # 4. Record Decision, Probability & End-to-End Metrics
+    # -----------------------------------------------------------------
+    PREDICTION_REQUESTS_TOTAL.labels(
+        status="success",
+        is_default=str(is_default).lower(),
+    ).inc()
+    MODEL_OUTPUT_PROBABILITY_HISTOGRAM.observe(default_prob)
+    INFERENCE_LATENCY_SECONDS.labels(stage="total").observe(duration_sec)
 
-    # Record telemetry for drift analysis
+    # -----------------------------------------------------------------
+    # 5. Drift Telemetry Logging
+    # -----------------------------------------------------------------
     log_inference_event(
         {
             "timestamp": datetime.now(timezone.utc).isoformat(),
