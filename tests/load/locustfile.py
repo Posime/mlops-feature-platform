@@ -5,7 +5,8 @@ to benchmark latency percentiles (p50, p95, p99) and validate Feast/ONNX through
 """
 
 import random
-from locust import HttpUser, task, between, events
+
+from locust import HttpUser, between, events, task
 
 
 class CreditScoringUser(HttpUser):
