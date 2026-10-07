@@ -93,7 +93,7 @@ MODEL_LOADED_GAUGE = Gauge(
 )
 
 # Number of requests between automated drift evaluations
-DRIFT_EVALUATION_INTERVAL = 20  # Set to 20 for local verification, 10_000 for production
+DRIFT_EVALUATION_INTERVAL = 1000  # Set to 1000 for realistic production load testing
 
 # In-memory runtime state shared across requests within a worker
 state = {}
@@ -122,10 +122,7 @@ async def lifespan(app: FastAPI):
         print("🔗 [SERVING INIT] Shared Redis client connected successfully.", flush=True)
     except Exception as exc:
         state["redis_client"] = None
-        print(
-            f"⚠️ [SERVING INIT] Redis connection warning (falling back to atomic disk tracking): {exc}",  # noqa: E501
-            flush=True,
-        )
+        print(f"⚠️ [SERVING INIT] Redis connection warning: {exc}", flush=True)
 
     # 2. Initialize Feast Online Feature Store
     feast_repo_path = os.getenv("FEAST_REPO_PATH", "src/features")
@@ -197,14 +194,13 @@ def trigger_drift_detection_job() -> None:
             "\n⚡ [MONITORING] Request milestone reached! Triggering drift detector subprocess...",
             flush=True,
         )
-        # Inherit standard streams so the full report and logs stream to the terminal
         result = subprocess.run(
             [sys.executable, "src/monitoring/drift_detector.py"],
             check=False,
         )
         print(
-            "✅ [MONITORING] Automated drift check completed with exit code: "
-            f"{result.returncode}.\n",
+            f"✅ [MONITORING] Automated drift check completed"
+            f"with exit code: {result.returncode}.\n",
             flush=True,
         )
     except Exception as exc:
@@ -355,20 +351,19 @@ async def predict(request: CreditPredictionRequest, background_tasks: Background
     INFERENCE_LATENCY_SECONDS.labels(stage="total").observe(duration_sec)
 
     # -----------------------------------------------------------------
-    # 5. Drift Telemetry Logging
+    # 5. Drift Telemetry Logging (Non-blocking Background Task)
     # -----------------------------------------------------------------
-    log_inference_event(
-        {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "user_id": request.user_id,
-            "transaction_amount": request.transaction_amount,
-            "account_balance": account_balance,
-            "credit_score": credit_score,
-            "failed_transactions_24h": failed_tx,
-            "default_probability": default_prob,
-            "is_default": is_default,
-        }
-    )
+    event_payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "user_id": request.user_id,
+        "transaction_amount": request.transaction_amount,
+        "account_balance": account_balance,
+        "credit_score": credit_score,
+        "failed_transactions_24h": failed_tx,
+        "default_probability": default_prob,
+        "is_default": is_default,
+    }
+    background_tasks.add_task(log_inference_event, event_payload)
 
     # -----------------------------------------------------------------
     # 6. Automated Drift Detection Trigger (Shared Milestone Check)
@@ -376,10 +371,8 @@ async def predict(request: CreditPredictionRequest, background_tasks: Background
     try:
         redis_conn = state.get("redis_client")
         if redis_conn is not None:
-            # Atomic counter across all Gunicorn worker processes via Redis
             total_requests = await redis_conn.incr("metrics:total_inferences")
         else:
-            # Multi-process safe file counter fallback
             counter_file = LOG_DIR / ".counter"
             with open(counter_file, "a+", encoding="utf-8") as f:
                 f.seek(0)
@@ -388,9 +381,6 @@ async def predict(request: CreditPredictionRequest, background_tasks: Background
                 f.seek(0)
                 f.truncate()
                 f.write(str(total_requests))
-
-        # Explicit live terminal telemetry feedback
-        print(f"📈 [REQUEST LOG] Total Inferences Processed: {total_requests}", flush=True)
 
         if total_requests % DRIFT_EVALUATION_INTERVAL == 0:
             print(
