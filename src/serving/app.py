@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -8,7 +10,8 @@ from pathlib import Path
 import numpy as np
 import onnxruntime as rt
 import prometheus_client
-from fastapi import FastAPI, HTTPException, Response, status
+import redis.asyncio as aioredis
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Response, status
 from feast import FeatureStore
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -29,8 +32,6 @@ from src.serving.schemas import (
 # =============================================================================
 # 1. METRIC INSTRUMENTATION: PILLAR A - PREDICTION COUNTERS
 # =============================================================================
-# Tracks total inference invocations partitioned by status ("success", "feast_error",
-# "onnx_error") and final business classification ("true", "false", "none").
 PREDICTION_REQUESTS_TOTAL = Counter(
     name="credit_inference_requests_total",
     documentation="Cumulative count of credit scoring inference API requests",
@@ -40,9 +41,6 @@ PREDICTION_REQUESTS_TOTAL = Counter(
 # =============================================================================
 # 1. METRIC INSTRUMENTATION: PILLAR B - LATENCY HISTOGRAMS
 # =============================================================================
-# Measures fine-grained duration across distinct pipeline stages (Feast online lookup,
-# ONNX graph execution, and full end-to-end request duration).
-# Buckets are aligned to sub-10ms operational targets (p50 <= 5ms, p95 <= 10ms, p99 <= 25ms).
 INFERENCE_LATENCY_SECONDS = Histogram(
     name="credit_inference_latency_seconds",
     documentation="Execution latency across inference stages in seconds",
@@ -63,15 +61,12 @@ INFERENCE_LATENCY_SECONDS = Histogram(
 # =============================================================================
 # 1. METRIC INSTRUMENTATION: PILLAR C - FEATURE & PROBABILITY DISTRIBUTIONS
 # =============================================================================
-# Tracks the distribution of calculated probabilities emitted by ONNX to detect
-# prediction drift against training validation baselines.
 MODEL_OUTPUT_PROBABILITY_HISTOGRAM = Histogram(
     name="credit_prediction_probability_distribution",
     documentation="Distribution of credit default probabilities emitted by the ONNX model",
     buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 )
 
-# Tracks input feature values to observe distribution shift and sudden spikes in real-time.
 FEATURE_TRANSACTION_AMOUNT_HISTOGRAM = Histogram(
     name="credit_feature_transaction_amount",
     documentation="Distribution of incoming transaction amounts requested",
@@ -80,15 +75,13 @@ FEATURE_TRANSACTION_AMOUNT_HISTOGRAM = Histogram(
 
 FEATURE_CREDIT_SCORE_HISTOGRAM = Histogram(
     name="credit_feature_retrieved_credit_score",
-    documentation="Distribution of credit scores retrieved from Feast Redis",
+    documentation="Distribution of credit scores retrieved from Feast",
     buckets=(300.0, 450.0, 550.0, 600.0, 650.0, 700.0, 750.0, 800.0, 850.0),
 )
 
 # =============================================================================
 # 1. METRIC INSTRUMENTATION: PILLAR D - SYSTEM HEALTH & DEPENDENCY GAUGES
 # =============================================================================
-# Exposes instantaneous binary health states for upstream dependencies:
-# 1.0 = healthy / connected, 0.0 = degraded / disconnected.
 STORE_CONNECTION_GAUGE = Gauge(
     name="credit_store_redis_connected",
     documentation="Health status of Feast Redis connection (1=Connected, 0=Disconnected)",
@@ -99,27 +92,51 @@ MODEL_LOADED_GAUGE = Gauge(
     documentation="Health status of ONNX runtime session (1=Loaded, 0=Unloaded)",
 )
 
+# Number of requests between automated drift evaluations
+DRIFT_EVALUATION_INTERVAL = 20  # Set to 20 for local verification, 10_000 for production
 
-# In-memory runtime state shared across requests
+# In-memory runtime state shared across requests within a worker
 state = {}
 
 
+# =============================================================================
+# 2. LIFESPAN MANAGEMENT (STARTUP & TEARDOWN)
+# =============================================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Set fallback for local testing environments
-    if "REDIS_CONNECTION_STRING" not in os.environ:
-        os.environ["REDIS_CONNECTION_STRING"] = "localhost:6379"
+    # Set fallback connection string for local testing environments
+    redis_conn_str = os.getenv("REDIS_CONNECTION_STRING", "localhost:6379")
+    if ":" in redis_conn_str:
+        redis_host, redis_port = redis_conn_str.split(":", 1)
+    else:
+        redis_host, redis_port = redis_conn_str, 6379
 
-    # Initialize Feast Online Feature Store
+    # 1. Initialize Shared Async Redis Client for Cross-Worker Telemetry Counters
+    try:
+        state["redis_client"] = aioredis.Redis(
+            host=redis_host,
+            port=int(redis_port),
+            decode_responses=True,
+        )
+        await state["redis_client"].ping()
+        print("🔗 [SERVING INIT] Shared Redis client connected successfully.", flush=True)
+    except Exception as exc:
+        state["redis_client"] = None
+        print(
+            f"⚠️ [SERVING INIT] Redis connection warning (falling back to atomic disk tracking): {exc}",  # noqa: E501
+            flush=True,
+        )
+
+    # 2. Initialize Feast Online Feature Store
     feast_repo_path = os.getenv("FEAST_REPO_PATH", "src/features")
     try:
         state["feature_store"] = FeatureStore(repo_path=feast_repo_path)
         STORE_CONNECTION_GAUGE.set(1.0)
     except Exception as exc:
         STORE_CONNECTION_GAUGE.set(0.0)
-        print(f"❌ [FEAST INIT ERROR] Failed to connect to store: {exc}")
+        print(f"❌ [FEAST INIT ERROR] Failed to connect to store: {exc}", flush=True)
 
-    # Initialize ONNX Runtime Session
+    # 3. Initialize ONNX Runtime Session
     onnx_path = os.getenv("MODEL_PATH", "models/model.onnx")
     if not os.path.exists(onnx_path):
         MODEL_LOADED_GAUGE.set(0.0)
@@ -136,7 +153,7 @@ async def lifespan(app: FastAPI):
     state["input_name"] = state["onnx_session"].get_inputs()[0].name
     MODEL_LOADED_GAUGE.set(1.0)
 
-    # Model warm-up run to prime caches
+    # 4. Model Warm-up Run to Prime Caches
     try:
         _ = state["feature_store"].get_online_features(
             features=["user_credit_features:credit_score"],
@@ -145,10 +162,13 @@ async def lifespan(app: FastAPI):
         dummy_tensor = np.zeros((1, 4), dtype=np.float32)
         _ = state["onnx_session"].run(None, {state["input_name"]: dummy_tensor})
     except Exception as exc:
-        print(f"⚠️ [SERVING INIT] Warm-up warning: {exc}")
+        print(f"⚠️ [SERVING INIT] Warm-up warning: {exc}", flush=True)
 
     yield
 
+    # Clean up on shutdown
+    if state.get("redis_client") is not None:
+        await state["redis_client"].aclose()
     state.clear()
     STORE_CONNECTION_GAUGE.set(0.0)
     MODEL_LOADED_GAUGE.set(0.0)
@@ -159,7 +179,7 @@ LOG_DIR = Path("data/inference_logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def log_inference_event(payload: dict):
+def log_inference_event(payload: dict) -> None:
     """Appends prediction event to daily JSONL buffer for drift detection."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     log_file = LOG_DIR / f"inferences_{today}.jsonl"
@@ -167,6 +187,33 @@ def log_inference_event(payload: dict):
         f.write(json.dumps(payload) + "\n")
 
 
+def trigger_drift_detection_job() -> None:
+    """
+    Spawns the drift detection pipeline in a detached subprocess.
+    Streams output unbuffered directly to stdout without blocking FastAPI worker loops.
+    """
+    try:
+        print(
+            "\n⚡ [MONITORING] Request milestone reached! Triggering drift detector subprocess...",
+            flush=True,
+        )
+        # Inherit standard streams so the full report and logs stream to the terminal
+        result = subprocess.run(
+            [sys.executable, "src/monitoring/drift_detector.py"],
+            check=False,
+        )
+        print(
+            "✅ [MONITORING] Automated drift check completed with exit code: "
+            f"{result.returncode}.\n",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"⚠️ [MONITORING] Drift check invocation error: {exc}", flush=True)
+
+
+# =============================================================================
+# 3. FASTAPI APPLICATION DEFINITION
+# =============================================================================
 app = FastAPI(
     title="Real-Time Credit Decisioning Engine",
     version="1.0.0",
@@ -205,7 +252,7 @@ def health_check():
     response_model=CreditPredictionResponse,
     status_code=status.HTTP_200_OK,
 )
-async def predict(request: CreditPredictionRequest):
+async def predict(request: CreditPredictionRequest, background_tasks: BackgroundTasks):
     t_start = time.perf_counter()
     store: FeatureStore = state.get("feature_store")
     session: rt.InferenceSession = state.get("onnx_session")
@@ -322,6 +369,38 @@ async def predict(request: CreditPredictionRequest):
             "is_default": is_default,
         }
     )
+
+    # -----------------------------------------------------------------
+    # 6. Automated Drift Detection Trigger (Shared Milestone Check)
+    # -----------------------------------------------------------------
+    try:
+        redis_conn = state.get("redis_client")
+        if redis_conn is not None:
+            # Atomic counter across all Gunicorn worker processes via Redis
+            total_requests = await redis_conn.incr("metrics:total_inferences")
+        else:
+            # Multi-process safe file counter fallback
+            counter_file = LOG_DIR / ".counter"
+            with open(counter_file, "a+", encoding="utf-8") as f:
+                f.seek(0)
+                raw_val = f.read().strip()
+                total_requests = int(raw_val) + 1 if raw_val.isdigit() else 1
+                f.seek(0)
+                f.truncate()
+                f.write(str(total_requests))
+
+        # Explicit live terminal telemetry feedback
+        print(f"📈 [REQUEST LOG] Total Inferences Processed: {total_requests}", flush=True)
+
+        if total_requests % DRIFT_EVALUATION_INTERVAL == 0:
+            print(
+                f"🎯 [MONITORING] Milestone threshold ({DRIFT_EVALUATION_INTERVAL}) reached! "
+                "Queueing drift detector background task...",
+                flush=True,
+            )
+            background_tasks.add_task(trigger_drift_detection_job)
+    except Exception as count_exc:
+        print(f"⚠️ [MONITORING] Counter tracking warning: {count_exc}", flush=True)
 
     return CreditPredictionResponse(
         user_id=request.user_id,

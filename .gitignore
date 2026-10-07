@@ -81,4 +81,5 @@ src/features/registry.db
 # Catch-all file extensions
 *.db
 *.jsonl
-benchmark_*.csv
+benchmark_*.csvdata/inference_logs/.counter
+data/inference_logs/.counter
