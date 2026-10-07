@@ -33,7 +33,7 @@ mlruns/
 *.h5
 
 # Generated Plots, Metrics & Benchmark Reports
-*.png
+#*.png
 *.jpg
 *.jpeg
 *.html
