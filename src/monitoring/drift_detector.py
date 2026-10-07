@@ -1,14 +1,72 @@
+"""
+Unified Statistical & Visual Drift Detection Pipeline.
+Combines custom vectorized PSI and SciPy Kolmogorov-Smirnov statistical tests
+with Evidently AI interactive HTML reporting and automated quality test suites.
+"""
+
 import json
 import sys
 from pathlib import Path
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
 from scipy.stats import ks_2samp
 
+# pyright: reportMissingImports=false
+try:
+    try:
+        from evidently.metric_preset import DataDriftPreset
+    except ImportError:
+        from evidently.metric_preset.data_drift import DataDriftPreset
 
+    from evidently import Report
+
+    try:
+        from evidently.test_preset import DataDriftTestPreset
+    except ImportError:
+        from evidently.test_preset.data_drift import DataDriftTestPreset
+
+    from evidently.test_suite import TestSuite
+except ImportError:
+    try:
+        from evidently.presets import DataDriftPreset
+        from evidently.report import Report
+        from evidently.test_suite import TestSuite
+
+        try:
+            from evidently.test_preset import DataDriftTestPreset
+        except ImportError:
+            DataDriftTestPreset = None
+    except ImportError:
+        DataDriftPreset = None
+        Report = None
+        DataDriftTestPreset = None
+        TestSuite = None
+
+# -----------------------------------------------------------------------------
+# Configuration & Constants
+# -----------------------------------------------------------------------------
+BASELINE_PATH = Path("data/processed/train_features.parquet")
+INFERENCE_LOGS_DIR = Path("data/inference_logs")
+REPORTS_DIR = Path("reports/drift")
+
+EVALUATION_FEATURES = [
+    "transaction_amount",
+    "account_balance",
+    "credit_score",
+    "failed_transactions_24h",
+]
+
+
+# -----------------------------------------------------------------------------
+# Custom Mathematical Formulations (Lightweight & Deterministic)
+# -----------------------------------------------------------------------------
 def calculate_psi(baseline: np.ndarray, target: np.ndarray, num_buckets: int = 10) -> float:
-    """Calculates the Population Stability Index (PSI) between two distributions."""
+    """
+    Calculate the Population Stability Index (PSI) between baseline and target distributions.
+    Applies quantile bucket bounds with Laplace smoothing to prevent division by zero.
+    """
     if len(baseline) == 0 or len(target) == 0:
         return 0.0
 
@@ -20,7 +78,7 @@ def calculate_psi(baseline: np.ndarray, target: np.ndarray, num_buckets: int = 1
     baseline_counts, _ = np.histogram(baseline, bins=bucket_bounds)
     target_counts, _ = np.histogram(target, bins=bucket_bounds)
 
-    # Laplace smoothing to prevent division by zero
+    # Laplace smoothing
     p = np.where(baseline_counts == 0, 1e-4, baseline_counts) / len(baseline)
     q = np.where(target_counts == 0, 1e-4, target_counts) / len(target)
 
@@ -28,25 +86,20 @@ def calculate_psi(baseline: np.ndarray, target: np.ndarray, num_buckets: int = 1
     return float(psi_value)
 
 
-def run_drift_analysis(
-    baseline_parquet_path: str = "data/processed/train_features.parquet",
-    inference_logs_dir: str = "data/inference_logs",
-    psi_threshold: float = 0.25,
-    ks_alpha: float = 0.05,
-) -> dict:
-    """Evaluates covariate and prediction drift against the baseline training dataset."""  # noqa: E501
-    baseline_path = Path(baseline_parquet_path)
-    logs_dir = Path(inference_logs_dir)
+# -----------------------------------------------------------------------------
+# Data Loading & Ingestion
+# -----------------------------------------------------------------------------
+def load_datasets() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load the reference parquet dataset and parse incoming daily JSONL inference logs."""
+    if not BASELINE_PATH.exists():
+        raise FileNotFoundError(f"Baseline training matrix missing at: {BASELINE_PATH}")
 
-    if not baseline_path.exists():
-        raise FileNotFoundError(f"Baseline training matrix missing at: {baseline_path}")
+    baseline_df = pd.read_parquet(BASELINE_PATH)
 
-    baseline_df = pd.read_parquet(baseline_path)
-
-    log_files = list(logs_dir.glob("inferences_*.jsonl"))
+    log_files = list(INFERENCE_LOGS_DIR.glob("inferences_*.jsonl"))
     if not log_files:
-        print("⚠️ No inference logs found for drift analysis.")
-        return {"status": "insufficient_data"}
+        print("⚠️ [DRIFT DETECTOR] No inference logs found for drift analysis.")
+        return baseline_df, pd.DataFrame()
 
     records = []
     for file in log_files:
@@ -58,40 +111,83 @@ def run_drift_analysis(
                 try:
                     records.append(json.loads(clean_line))
                 except json.JSONDecodeError:
-                    # Gracefully bypass partially written or malformed records
-                    print(f"⚠️ Skipping malformed JSON line {line_no} in {file.name}")
+                    print(
+                        f"⚠️ [DRIFT DETECTOR] Skipping malformed JSON line {line_no} in {file.name}"
+                    )
                     continue
 
-    if len(records) < 20:
-        print(
-            f"⚠️ Insufficient records ({len(records)} found, minimum 20 needed) for statistical power."  # noqa: E501
-        )
-        return {"status": "insufficient_data"}
-
     target_df = pd.DataFrame(records)
+    return baseline_df, target_df
 
-    features = [
-        "transaction_amount",
-        "account_balance",
-        "credit_score",
-        "failed_transactions_24h",
-    ]
 
-    drift_report = {
+# -----------------------------------------------------------------------------
+# Evidently Visual & Suite Artifact Generation
+# -----------------------------------------------------------------------------
+def generate_evidently_artifacts(
+    baseline_df: pd.DataFrame, target_df: pd.DataFrame, reports_dir: Path
+) -> None:
+    """Generate both the interactive HTML diagnostic dashboard and test artifacts."""
+    ref_aligned = baseline_df[EVALUATION_FEATURES].copy()
+    cur_aligned = target_df[EVALUATION_FEATURES].copy()
+
+    html_output_path = reports_dir / "drift_report.html"
+
+    try:
+        from evidently.legacy.metric_preset import DataDriftPreset
+        from evidently.legacy.report import Report
+
+        print("📊 [EVIDENTLY] Generating visual HTML distribution dashboard...")
+        report = Report(metrics=[DataDriftPreset()])
+        report.run(reference_data=ref_aligned, current_data=cur_aligned)
+        report.save_html(str(html_output_path))
+        print(f"   -> Visual HTML report saved to: {html_output_path}")
+
+    except Exception as e:
+        print(f"⚠️ [EVIDENTLY] Error generating visual dashboard: {e}")
+        print("   Continuing with custom statistical report.")
+
+
+# -----------------------------------------------------------------------------
+# Main Analysis Pipeline
+# -----------------------------------------------------------------------------
+def run_drift_analysis(
+    psi_threshold: float = 0.25,
+    ks_alpha: float = 0.05,
+    min_records: int = 20,
+) -> Dict[str, Any]:
+    """Execute dual-layer drift evaluation across baseline and live inference logs."""
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    baseline_df, target_df = load_datasets()
+
+    if len(target_df) < min_records:
+        print(
+            f"⚠️ [DRIFT DETECTOR] Insufficient records ({len(target_df)} found, "
+            f"minimum {min_records} needed) for statistically powered drift testing."
+        )
+        return {"status": "insufficient_data", "retrain_recommended": False}
+
+    drift_report: Dict[str, Any] = {
         "timestamp": pd.Timestamp.now().isoformat(),
-        "sample_size": len(target_df),
+        "baseline_sample_size": len(baseline_df),
+        "target_sample_size": len(target_df),
         "features": {},
         "retrain_recommended": False,
     }
 
     print("\n🔍 ================== STATISTICAL DRIFT REPORT ==================")
     print(
-        f"Analyzing {len(target_df)} live inferences against {len(baseline_df)} baseline records\n"
+        f"Evaluating {len(target_df)} live inferences against "
+        f"{len(baseline_df)} baseline records\n"
     )
 
-    for col in features:
-        base_vals = baseline_df[col].dropna().values
-        target_vals = target_df[col].dropna().values
+    # Statistical Evaluation (SciPy + Custom PSI)
+    for col in EVALUATION_FEATURES:
+        if col not in baseline_df.columns or col not in target_df.columns:
+            print(f"⚠️ Column '{col}' not present across both datasets. Skipping.")
+            continue
+
+        base_vals = baseline_df[col].dropna().to_numpy()
+        target_vals = target_df[col].dropna().to_numpy()
 
         ks_stat, ks_p_val = ks_2samp(base_vals, target_vals)
         psi_val = calculate_psi(base_vals, target_vals)
@@ -113,10 +209,14 @@ def run_drift_analysis(
 
     print("=================================================================\n")
 
-    report_path = Path("reports/drift_report.json")
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(report_path, "w", encoding="utf-8") as f:
+    # Save Custom Statistical JSON Report
+    custom_json_path = REPORTS_DIR / "drift_report.json"
+    with open(custom_json_path, "w", encoding="utf-8") as f:
         json.dump(drift_report, f, indent=2)
+    print(f"📁 Statistical summary report saved to: {custom_json_path}")
+
+    # Generate Evidently HTML & JSON Artifacts
+    generate_evidently_artifacts(baseline_df, target_df, REPORTS_DIR)
 
     return drift_report
 
@@ -125,9 +225,10 @@ if __name__ == "__main__":
     report = run_drift_analysis()
     if report.get("retrain_recommended"):
         print(
-            "🚨 ACTION REQUIRED: Critical drift detected. Triggering automated retraining flow."  # noqa: E501
+            "\n🚨 ACTION REQUIRED: Statistically significant drift detected. "
+            "Pipeline recommends automated retraining."
         )
         sys.exit(1)
     else:
-        print("✅ Distributions within acceptable bounds. No retraining required.")
+        print("\n✅ Distributions within acceptable bounds. No retraining required.")
         sys.exit(0)
