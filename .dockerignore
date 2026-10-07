@@ -1,11 +1,16 @@
 .git
+.github
 .venv
 __pycache__
 *.pyc
+*.pyo
+*.pyd
 .pytest_cache
 .ruff_cache
-data/inference_logs/
+tests/
+data/inference_logs/*.jsonl
 mlruns/
 mlflow_artifacts/
 reports/
 *.db
+.env
